@@ -1,16 +1,29 @@
-# jev-trader — Coinbase paper fork
+# jev-trader — Coinbase paper + cross-market signals
 
-A Jev-powered short-horizon trading experiment for Coinbase Advanced Trade.
+A Jev-powered short-horizon trading experiment.
 
-V0 consumes the public Coinbase `level2`, `market_trades`, and `heartbeats` WebSocket channels, asks Jev (or a deterministic mock model) to choose **buy / sell / hold**, and paper-trades one passive maker quote near the touch. It logs decisions, simulated fills, position, fees, and P&L so we can test whether Jev adds edge before enabling real execution.
+Coinbase remains the **paper execution/reference venue**. Binance Spot and Korean Upbit run as **keyless signal venues**. Every decision records the exact cross-market snapshot that Jev saw, so we can later measure whether those signals actually improve out-of-sample results.
 
 ## Safety boundary
 
-**V0 is paper-only.** `DRY_RUN=false` intentionally refuses to start. No Coinbase API key is required and the code cannot place live orders yet.
+**V0 is paper-only.** `DRY_RUN=false` intentionally refuses to start. No Coinbase, Binance, or Upbit trading credentials are used.
+
+## Data path
+
+```text
+Binance BTC/SOL/SHIB USDT ─┐
+                           ├─> cross-market snapshot ─┐
+Upbit KRW asset + KRW-USDT ┘                         │
+                                                     ├─> Jev/mock ─> paper quote
+Coinbase L2 + trades ────────────────────────────────┘
+```
+
+For Upbit, the asset's KRW midpoint is divided by the `KRW-USDT` midpoint to create an approximate dollar-normalized Korean price. That lets us measure Korean premium/discount and short-term Korean returns without adding an FX API key.
 
 ## Run
 
 ```bash
+git checkout coinbase-paper-v0
 cp .env.example .env
 bun install
 bun run start
@@ -18,65 +31,99 @@ bun run start
 
 Defaults:
 
-- product: `BTC-USDC`
+- Coinbase: `BTC-USDC`
+- Binance signal: `BTCUSDT`
+- Upbit signal: `KRW-BTC`, normalized with `KRW-USDT`
 - decision interval: 1 second
 - forecast horizon: 30 seconds
 - model: `mock`
-- quote size: `0.0001` base asset
 
 To use Jev:
 
-```bash
+```env
 MODEL=jev
 TYPESAFE_AI_API_KEY=...
 ```
 
-## What the model sees
+## BTC / SOL / SHIB
 
-Each decision includes:
+The signal mappings are inferred from `PRODUCT_ID`. Example configurations are included at the bottom of `.env.example`.
 
+Typical experiments:
+
+```text
+BTC:  Coinbase BTC-USDC  vs Binance BTCUSDT  vs Upbit KRW-BTC
+SOL:  Coinbase SOL-USDC  vs Binance SOLUSDT  vs Upbit KRW-SOL
+SHIB: Coinbase SHIB-USD  vs Binance SHIBUSDT vs Upbit KRW-SHIB
+```
+
+For SHIB, verify the exact Coinbase product and tick size visible to your account before running; the sample values are configuration examples, not an exchange guarantee.
+
+## What Jev sees
+
+### Coinbase
 - best bid / ask and spread
 - top five book levels
 - 10 / 25 / 50 bps depth
 - order-book imbalance
 - 1 / 5 / 20-step and horizon returns
-- recent mids
-- recent public trade flow and CVD
-- current risk-cap permissions
+- public aggressive trade flow / CVD
+- current position-cap permissions
 
-Jev returns probabilities for `buy`, `sell`, and `hold`. Deterministic code owns the position cap and execution simulation.
+### Binance
+- best bid/ask midpoint
+- price difference vs Coinbase in bps
+- 1s / 5s / 30s returns
+- 5-second aggressive buy/sell flow and CVD
 
-## Paper fill model
+### Korean Upbit
+- KRW market midpoint
+- live `KRW-USDT` midpoint
+- approximate USDT-normalized asset price
+- Korean premium/discount vs Coinbase
+- 1s / 5s / 30s returns
+- 5-second aggressive buy/sell flow and CVD
 
-One passive order rests until the next decision interval. Public trades received after placement can fill it when they print through its price. Fills are capped by observed trade size. This is still an approximation: it does **not** model queue position, hidden liquidity, latency, or exchange-specific matching priority, so paper P&L should be treated as an optimistic research signal rather than deployable alpha.
+Snapshots older than `SIGNAL_MAX_AGE_MS` are removed before the model sees them.
 
-Set `PAPER_MAKER_FEE_BPS` to your actual Coinbase maker fee tier before judging net results.
+## Logging
+
+Each tick is appended to `data/events.jsonl` and includes:
+
+- Coinbase market state
+- the exact Binance/Upbit signal snapshot
+- Jev/mock probabilities
+- paper quote/fill
+- position
+- fees and P&L
+
+This is important: we can later replay the data and compare Coinbase-only vs Coinbase+Binance vs Coinbase+Upbit rather than relying on anecdotes.
 
 ## Endpoints
 
 - `GET /` current snapshot
 - `GET /history` recent decision ticks
-- `GET /events` SSE stream (`snapshot`, `tick`, `quote`, `fill`, `ping`)
-
-Events are also appended to `data/events.jsonl`.
+- `GET /events` SSE stream
 
 ## Main files
 
 ```text
 src/config.ts           environment/config
-src/coinbase.ts         public Coinbase WebSocket feed + in-memory L2 book/trades
-src/model.ts            Jev + mock decision models
-src/coinbase-trader.ts  paper execution, fills, position and P&L
+src/coinbase.ts         Coinbase public L2 + trades
+src/signals.ts          Binance + Korean Upbit public signal feeds
+src/model.ts            Jev + deterministic comparison model
+src/coinbase-trader.ts  paper execution, logging, position and P&L
 src/server.ts           snapshot/history/SSE API
 src/index.ts            startup
 ```
 
-The original Monad/Kuru implementation files remain in the fork for reference but are no longer imported by `src/index.ts`.
+The original Monad/Kuru implementation remains in the fork for reference but is no longer on the active startup path.
 
-## Next gates before real money
+## Before real money
 
-1. Run long enough to collect a meaningful sample of decisions/fills.
-2. Compare Jev to the mock/baseline on the exact same feed.
-3. Add realistic queue-position/slippage assumptions and the real maker fee tier.
-4. Add walk-forward / replay evaluation and confidence calibration.
-5. Only then add authenticated Coinbase order execution behind a separate explicit live flag and hard risk limits.
+1. Collect a substantial dataset on BTC, SOL and SHIB.
+2. Replay identical periods with external signals removed.
+3. Measure hit rate and P&L by Jev confidence bucket.
+4. Add realistic queue position, slippage and the real Coinbase maker fee.
+5. Add Hyperliquid/Solana signals only if they improve validation results.
+6. Only after that consider authenticated execution behind explicit live flags and hard loss limits.
