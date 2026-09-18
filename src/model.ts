@@ -95,14 +95,16 @@ export class MockModel implements Model {
       const bFlowDen = b.buyBase5s + b.sellBase5s;
       const bFlow = bFlowDen ? b.cvdBase5s / bFlowDen : 0;
       const lead1 = (b.return1sBps ?? 0) - state.returnsBps.last1;
-      const lead5 = (b.return5sBps ?? 0) - state.returnsBps.last5;\n      external += lead1 / 4 + lead5 / 8 + bFlow;
+      const lead5 = (b.return5sBps ?? 0) - state.returnsBps.last5;
+      external += lead1 / 4 + lead5 / 8 + bFlow;
     }
     const u = state.crossMarket.upbit;
     if (u) {
       const uFlowDen = u.buyBase5s + u.sellBase5s;
       const uFlow = uFlowDen ? u.cvdBase5s / uFlowDen : 0;
       const lead1 = (u.return1sBps ?? 0) - state.returnsBps.last1;
-      const lead5 = (u.return5sBps ?? 0) - state.returnsBps.last5;\n      external += lead1 / 6 + lead5 / 12 + uFlow * 0.5;
+      const lead5 = (u.return5sBps ?? 0) - state.returnsBps.last5;
+      external += lead1 / 6 + lead5 / 12 + uFlow * 0.5;
     }
     external = Math.max(-3, Math.min(3, external));
 
