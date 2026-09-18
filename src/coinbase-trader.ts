@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { config } from "./config";
 import { CoinbaseFeed, type Book, type Fill, type Quote, type Side, type TradePrint } from "./coinbase";
 import type { Action, Decision, Model, TradeState } from "./model";
+import { ExternalSignals, type CrossMarketSnapshot } from "./signals";
 
 export interface TraderEvent {
   tick: number;
@@ -13,6 +14,7 @@ export interface TraderEvent {
   bestBid: number;
   bestAsk: number;
   spreadBps: number;
+  signals: CrossMarketSnapshot;
   decision: { action: Action; probabilities: Record<Action, number>; pUp: number; upIn10: number; latencyMs: number; late: boolean } | null;
   quote: Quote | null;
   fill: Fill | null;
@@ -61,6 +63,7 @@ export class CoinbaseTrader {
   constructor(
     private feed: CoinbaseFeed,
     private model: Model,
+    private signals: ExternalSignals,
     private onEvent: (e: TraderEvent, timing?: Timing) => void = () => {},
     private onFill: (tick: number, fill: Fill) => void = () => {},
   ) {
@@ -84,7 +87,7 @@ export class CoinbaseTrader {
     if (this.busy) {
       this.totals.lateTicks++;
       const book = this.feed.book();
-      if (book) this.emit(tick, book, null, null, null, true);
+      if (book) this.emit(tick, book, this.signals.snapshot(book.mid), null, null, null, true);
       return;
     }
 
@@ -94,6 +97,7 @@ export class CoinbaseTrader {
       const book = this.feed.book();
       if (!book) throw new Error("Coinbase book unavailable");
       const readMs = performance.now() - t0;
+      const crossMarket = this.signals.snapshot(book.mid);
 
       const batch = this.feed.tradesAfter(this.tradeCursor);
       this.tradeCursor = batch.cursor;
@@ -104,7 +108,7 @@ export class CoinbaseTrader {
       const keep = Math.max(400, Math.ceil(config.horizonMs / config.decisionIntervalMs) * 4);
       if (this.mids.length > keep) this.mids.splice(0, this.mids.length - keep);
 
-      const decision = await this.model.decide(this.buildState(tick, book));
+      const decision = await this.model.decide(this.buildState(tick, book, crossMarket));
       this.totals.decisions++;
       this.totals.jevUsd += (decision.inputTokens / 1e6) * config.jevUsdPerMTok;
 
@@ -129,7 +133,7 @@ export class CoinbaseTrader {
         }
       }
 
-      this.emit(tick, book, decision, quote, fill, false, { readMs: Math.round(readMs), loopMs: Math.round(performance.now() - t0) });
+      this.emit(tick, book, crossMarket, decision, quote, fill, false, { readMs: Math.round(readMs), loopMs: Math.round(performance.now() - t0) });
     } catch (error) {
       console.error(`tick ${tick}:`, (error as Error).message);
     } finally {
@@ -162,7 +166,7 @@ export class CoinbaseTrader {
     return Math.abs(next) <= config.maxPositionBase + 1e-12;
   }
 
-  private buildState(tick: number, book: Book): TradeState {
+  private buildState(tick: number, book: Book, crossMarket: CrossMarketSnapshot): TradeState {
     const n = this.mids.length;
     const ret = (steps: number) => n > steps ? ((this.mids[n - 1]! - this.mids[n - 1 - steps]!) / this.mids[n - 1 - steps]!) * 10_000 : 0;
     const horizonSteps = Math.max(1, Math.round(config.horizonMs / config.decisionIntervalMs));
@@ -198,6 +202,7 @@ export class CoinbaseTrader {
         lastSide: trades.at(-1)?.side ?? null,
       },
       recentTrades: trades.slice(-10).map((t) => `${t.side} ${round(t.size, 8)} @ ${t.price.toFixed(priceDecimals())}`),
+      crossMarket,
       allowed: { buy: this.allowed("buy"), sell: this.allowed("sell") },
     };
   }
@@ -224,7 +229,16 @@ export class CoinbaseTrader {
   private entryPrice() { return this.position.base ? this.position.costUsd / this.position.base : null; }
   private unrealizedUsd(mid: number) { return this.position.base ? this.position.base * (mid - this.entryPrice()!) : 0; }
 
-  private emit(tick: number, book: Book, decision: Decision | null, quote: Quote | null, fill: Fill | null, late: boolean, timing?: Timing) {
+  private emit(
+    tick: number,
+    book: Book,
+    signals: CrossMarketSnapshot,
+    decision: Decision | null,
+    quote: Quote | null,
+    fill: Fill | null,
+    late: boolean,
+    timing?: Timing,
+  ) {
     const unrealized = this.unrealizedUsd(book.mid);
     this.totals.pnlUsd = this.totals.realizedUsd + unrealized - this.totals.feesUsd;
     this.totals.pnlPct = this.totals.pnlUsd / config.bankrollUsd * 100;
@@ -237,6 +251,7 @@ export class CoinbaseTrader {
       bestBid: book.bid,
       bestAsk: book.ask,
       spreadBps: round(book.spreadBps, 3),
+      signals,
       decision: late
         ? { action: "hold", probabilities: { buy: 0, sell: 0, hold: 1 }, pUp: 0.5, upIn10: 0.5, latencyMs: 0, late: true }
         : decision && { action: decision.action, probabilities: decision.probabilities, pUp: decision.pUp, upIn10: decision.upIn10, latencyMs: Math.round(decision.latencyMs), late: false },
