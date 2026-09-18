@@ -1,41 +1,41 @@
 import { config } from "./config";
-import { startBlockFeed } from "./chain";
-import { Market } from "./market";
+import { CoinbaseFeed } from "./coinbase";
+import { CoinbaseTrader } from "./coinbase-trader";
 import { createModel } from "./model";
-import { Trader } from "./trader";
-import { log10 } from "./book";
 import { startServer } from "./server";
 
-const market = new Market();
-await market.init();
+if (!config.dryRun) {
+  throw new Error("Live Coinbase order execution is intentionally disabled in V0. Set DRY_RUN=true and validate the paper results first.");
+}
+
+const feed = new CoinbaseFeed();
+feed.start();
+await feed.waitForBook();
+
 const model = createModel();
-
+let trader: CoinbaseTrader;
 const server = startServer(
-  { model: model.name, wallet: market.address, dryRun: config.dryRun, market: config.market, startedAt: Date.now() },
-  () => trader.history,
+  { model: model.name, dryRun: true, market: config.productId, venue: config.venue, startedAt: Date.now() },
+  () => trader?.history ?? [],
 );
-const trader = new Trader(
-  market,
-  model,
-  (e, t) => {
-    server.broadcast(e);
-    if (e.decision && !e.decision.late) {
-      const p = e.decision.probabilities;
-      const q = e.quote;
-      const quote = !q ? " NO QUOTE (cap or funds on both sides)" : ` ${q.side.toUpperCase()} ${q.size} @ ${q.price.toFixed(6)}${q.capped ? " capped" : ""}${q.status === "sim" ? " (sim)" : ` cancel ${q.cancel.length} ${q.txHash}`}`;
-      console.log(`#${e.block} ${e.mid.toFixed(6)} b${(p.buy * 100).toFixed(0)} s${(p.sell * 100).toFixed(0)} ${e.decision.latencyMs}ms${quote} pnl $${e.totals.pnlUsd}${t ? ` · read ${t.readMs}ms loop ${t.loopMs}ms` : ""}`);
-    }
-  },
-  (block, fill) => {
-    server.broadcastFill(block, fill);
-    console.log(`#${block} FILL ${fill.side} ${fill.size} @ ${fill.price.toFixed(6)}${fill.simulated ? " (sim)" : ` order ${fill.orderId} ${fill.txHash}`}`);
-  },
-  (block, quote) => {
-    server.broadcastQuote(block, quote);
-    if (quote.status !== "placed") console.log(`#${block} ${quote.status.toUpperCase()} ${quote.side} @ ${quote.price.toFixed(6)} gas ${quote.gasMon.toFixed(6)} MON ${quote.txHash}`);
-  },
-);
-trader.attachTradeFeed(log10(market.params.sizePrecision));
 
-console.log(`jev-trader · model=${model.name} · post-only ${config.quoteInsideTicks} tick inside the touch · horizon ${config.horizonBlocks} blocks · ${config.dryRun ? "DRY RUN" : `wallet ${market.address}`} · market ${config.market} · read ${config.readRpcUrl} · :${config.port}`);
-startBlockFeed((block) => trader.onBlock(block));
+trader = new CoinbaseTrader(
+  feed,
+  model,
+  (event, timing) => {
+    server.broadcast(event);
+    const d = event.decision;
+    const q = event.quote;
+    const probs = d ? `b${(d.probabilities.buy * 100).toFixed(0)} s${(d.probabilities.sell * 100).toFixed(0)} h${(d.probabilities.hold * 100).toFixed(0)}` : "late";
+    const quote = q ? ` ${q.side.toUpperCase()} ${q.size} @ ${q.price}` : " NO QUOTE";
+    console.log(`#${event.tick} ${event.market} ${event.mid.toFixed(2)} ${probs}${quote} pnl $${event.totals.pnlUsd}${timing ? ` · loop ${timing.loopMs}ms` : ""}`);
+    if (q) server.broadcastQuote(event.tick, q);
+  },
+  (tick, fill) => {
+    server.broadcastFill(tick, fill);
+    console.log(`#${tick} PAPER FILL ${fill.side} ${fill.size} @ ${fill.price} fee $${fill.feeUsd.toFixed(6)}`);
+  },
+);
+
+console.log(`jev-trader · Coinbase ${config.productId} · model=${model.name} · ${config.decisionIntervalMs}ms decisions · ${config.horizonMs}ms horizon · PAPER ONLY · :${config.port}`);
+trader.start();
