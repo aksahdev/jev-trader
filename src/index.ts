@@ -2,6 +2,7 @@ import { config } from "./config";
 import { CoinbaseFeed } from "./coinbase";
 import { CoinbaseTrader } from "./coinbase-trader";
 import { createModel } from "./model";
+import { ExternalSignals } from "./signals";
 import { startServer } from "./server";
 
 if (!config.dryRun) {
@@ -9,7 +10,10 @@ if (!config.dryRun) {
 }
 
 const feed = new CoinbaseFeed();
+const signals = new ExternalSignals();
+
 feed.start();
+signals.start();
 await feed.waitForBook();
 
 const model = createModel();
@@ -22,13 +26,17 @@ const server = startServer(
 trader = new CoinbaseTrader(
   feed,
   model,
+  signals,
   (event, timing) => {
     server.broadcast(event);
     const d = event.decision;
     const q = event.quote;
     const probs = d ? `b${(d.probabilities.buy * 100).toFixed(0)} s${(d.probabilities.sell * 100).toFixed(0)} h${(d.probabilities.hold * 100).toFixed(0)}` : "late";
     const quote = q ? ` ${q.side.toUpperCase()} ${q.size} @ ${q.price}` : " NO QUOTE";
-    console.log(`#${event.tick} ${event.market} ${event.mid.toFixed(2)} ${probs}${quote} pnl $${event.totals.pnlUsd}${timing ? ` · loop ${timing.loopMs}ms` : ""}`);
+    const binance = event.signals.binance?.deltaVsCoinbaseBps;
+    const korea = event.signals.upbit?.premiumVsCoinbaseBps;
+    const cross = ` · bn ${binance == null ? "n/a" : binance.toFixed(1) + "bp"} · kr ${korea == null ? "n/a" : korea.toFixed(1) + "bp"}`;
+    console.log(`#${event.tick} ${event.market} ${event.mid.toFixed(8)} ${probs}${quote} pnl $${event.totals.pnlUsd}${cross}${timing ? ` · loop ${timing.loopMs}ms` : ""}`);
     if (q) server.broadcastQuote(event.tick, q);
   },
   (tick, fill) => {
@@ -37,5 +45,7 @@ trader = new CoinbaseTrader(
   },
 );
 
-console.log(`jev-trader · Coinbase ${config.productId} · model=${model.name} · ${config.decisionIntervalMs}ms decisions · ${config.horizonMs}ms horizon · PAPER ONLY · :${config.port}`);
+console.log(
+  `jev-trader · Coinbase ${config.productId} · signals Binance=${config.binanceSignals ? config.binanceSymbol : "off"} Upbit=${config.upbitSignals ? config.upbitAssetCode : "off"} · model=${model.name} · ${config.decisionIntervalMs}ms decisions · PAPER ONLY · :${config.port}`,
+);
 trader.start();
