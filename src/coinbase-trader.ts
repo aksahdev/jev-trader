@@ -58,7 +58,7 @@ export class CoinbaseTrader {
   private resting: RestingOrder | null = null;
   private tradeCursor = 0;
   private position = { base: 0, costUsd: 0 };
-  private totals: Totals = { ticks: 0, decisions: 0, quotes: 0, fills: 0, holds: 0, lateTicks: 0, jevUsd: 0, feesUsd: 0, realizedUsd: 0, pnlUsd: 0, pnlPct: 0 };
+  private totals: Totals = { ticks: 0, decisions: 0, quotes: 0, fills: 0, holds: 0, lateTicks: 0, jevUsd: 0, feesUsd: 0, realizedUsd: 0, grossPnlUsd: 0, pnlUsd: 0, pnlPct: 0 };
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -274,7 +274,7 @@ export class CoinbaseTrader {
     timing?: Timing,
   ) {
     const unrealized = this.unrealizedUsd(book.mid);
-    this.totals.pnlUsd = this.totals.realizedUsd + unrealized - this.totals.feesUsd;
+    this.totals.grossPnlUsd = this.totals.realizedUsd + unrealized;\n    this.totals.pnlUsd = this.totals.grossPnlUsd - this.totals.feesUsd;
     this.totals.pnlPct = this.totals.pnlUsd / config.bankrollUsd * 100;
     const event: TraderEvent = {
       tick,
