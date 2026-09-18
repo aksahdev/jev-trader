@@ -126,7 +126,15 @@ export class CoinbaseTrader {
           decision.action = side;
           const price = quotePrice(side, book);
           const orderId = this.nextOrderId++;
-          this.resting = {\n            id: orderId,\n            side,\n            price,\n            size: config.tradeSizeBase,\n            remaining: config.tradeSizeBase,\n            placedTick: tick,\n            queueAhead: queueAheadAtPrice(side, price, book) * config.paperQueueFraction,\n          };
+          this.resting = {
+            id: orderId,
+            side,
+            price,
+            size: config.tradeSizeBase,
+            remaining: config.tradeSizeBase,
+            placedTick: tick,
+            queueAhead: queueAheadAtPrice(side, price, book) * config.paperQueueFraction,
+          };
           quote = { side, price, size: config.tradeSizeBase, txHash: null, cancel: [], status: "sim", orderId, capped };
           this.totals.quotes++;
         } else {
