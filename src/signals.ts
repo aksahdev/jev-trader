@@ -88,7 +88,8 @@ class BinanceSignalFeed {
         try {
           const message = JSON.parse(String(event.data));
           const data = message.data ?? message;
-          if (data.e === "bookTicker") {
+          const stream = String(message.stream ?? "");
+          if (data.e === "bookTicker" || stream.endsWith("@bookTicker") || (data.b != null && data.a != null && data.s != null)) {
             const bid = Number(data.b);
             const ask = Number(data.a);
             if (Number.isFinite(bid) && Number.isFinite(ask) && ask > bid) {
