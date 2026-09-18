@@ -50,7 +50,7 @@ type WsMessage = {
   events?: Array<Record<string, any>>;
 };
 
-/** Public Coinbase Advanced Trade feed: level2 + market_trades + heartbeats. */
+/** Public Coinbase Advanced Trade feed: level2 + market_trades. */
 export class CoinbaseFeed {
   private bids = new Map<number, number>();
   private asks = new Map<number, number>();
@@ -84,7 +84,7 @@ export class CoinbaseFeed {
       if (book) return book;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    throw new Error(`Coinbase level2 book not ready after ${timeoutMs}ms`);
+    throw new Error(`Coinbase level2 book not ready after ${timeoutMs}ms (product=${config.productId}, connected=${this.connected})`);
   }
 
   book(): Book | null {
@@ -138,14 +138,18 @@ export class CoinbaseFeed {
         }));
         subscribe("level2", [config.productId]);
         subscribe("market_trades", [config.productId]);
-        subscribe("heartbeats", [config.productId]);
+        console.log(`coinbase websocket subscribed: ${config.productId}`);
       };
       ws.onmessage = (event) => {
         try { this.handle(JSON.parse(String(event.data)) as WsMessage); }
         catch (error) { console.error("coinbase websocket message:", (error as Error).message); }
       };
-      ws.onerror = () => ws.close();
-      ws.onclose = () => {
+      ws.onerror = (event) => {
+        console.error("coinbase websocket error", event);
+        ws.close();
+      };
+      ws.onclose = (event) => {
+        console.error(`coinbase websocket closed code=${event.code} reason=${event.reason || "n/a"}`);
         if (!this.running) return;
         const next = Math.min(this.reconnectMs * 2, 10_000);
         this.connect(this.reconnectMs);
@@ -154,7 +158,15 @@ export class CoinbaseFeed {
     }, delayMs);
   }
 
-  private handle(message: WsMessage) {
+  private handle(message: WsMessage & { type?: string; message?: string }) {
+    if (message.type === "error") {
+      console.error(`coinbase websocket server error: ${message.message ?? JSON.stringify(message)}`);
+      return;
+    }
+    if (message.channel === "subscriptions") {
+      console.log("coinbase websocket subscriptions confirmed");
+      return;
+    }
     if (message.channel === "l2_data") this.handleBook(message);
     if (message.channel === "market_trades") this.handleTrades(message);
   }
