@@ -46,7 +46,7 @@ const QUESTIONS = {
       question: "At the configured horizon, which action has the best expected outcome for a passive maker quote on Coinbase: buy, sell, or hold?",
       goal: "Trade the configured Coinbase spot product using a post-only style paper quote near the touch. Prefer hold when the expected short-horizon move is too small or uncertain to justify adverse-selection and fee risk.",
       timing: "A decision is made every `decisionIntervalMs`; the forecast horizon is `horizonMs`.",
-      inputs: "Use Coinbase taker flow, order-book imbalance/depth, spread, short-horizon returns and recent mids. Also use `crossMarket`: Binance is a global USDT signal venue; Upbit is the Korean KRW market normalized by KRW-USDT. Positive `deltaVsCoinbaseBps` means that venue is priced above Coinbase. Compare 1s/5s/30s returns and 5s aggressive flow across venues to detect lead/lag rather than assuming any venue always leads. Upbit `premiumVsCoinbaseBps` is a regime signal and can persist, so do not blindly mean-revert it. Ignore a venue when its snapshot is null. Treat conflicting or weak evidence as a reason to hold.",
+      inputs: "Use Coinbase taker flow, order-book imbalance/depth, spread, short-horizon returns and recent mids. Also use `crossMarket`: Binance is a global USDT signal venue; Upbit is the Korean KRW market normalized by KRW-USDT. Positive `deltaVsCoinbaseBps` means that venue is priced above Coinbase, but the absolute level can contain persistent quote-currency basis (for example USDT vs USD). Do NOT treat a persistent positive absolute delta as inherently bullish. For direction, focus on relative changes/return differences and aggressive flow across venues. Upbit `premiumVsCoinbaseBps` is primarily a regime signal and can persist, so do not blindly mean-revert it. Ignore a venue when its snapshot is null. Treat conflicting or weak evidence as a reason to hold.",
     },
     criteria: {
       buy: "Rest a passive bid: upward short-horizon edge is strongest and large enough to justify the quote risk.",
@@ -94,13 +94,13 @@ export class MockModel implements Model {
     if (b) {
       const bFlowDen = b.buyBase5s + b.sellBase5s;
       const bFlow = bFlowDen ? b.cvdBase5s / bFlowDen : 0;
-      external += (b.return1sBps ?? 0) / 6 + (b.deltaVsCoinbaseBps ?? 0) / 10 + bFlow;
+      const lead1 = (b.return1sBps ?? 0) - state.returnsBps.last1;\n      const lead5 = (b.return5sBps ?? 0) - state.returnsBps.last5;\n      external += lead1 / 4 + lead5 / 8 + bFlow;
     }
     const u = state.crossMarket.upbit;
     if (u) {
       const uFlowDen = u.buyBase5s + u.sellBase5s;
       const uFlow = uFlowDen ? u.cvdBase5s / uFlowDen : 0;
-      external += (u.return1sBps ?? 0) / 8 + (u.deltaVsCoinbaseBps ?? 0) / 15 + uFlow * 0.5;
+      const lead1 = (u.return1sBps ?? 0) - state.returnsBps.last1;\n      const lead5 = (u.return5sBps ?? 0) - state.returnsBps.last5;\n      external += lead1 / 6 + lead5 / 12 + uFlow * 0.5;
     }
     external = Math.max(-3, Math.min(3, external));
 
