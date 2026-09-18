@@ -203,6 +203,7 @@ class UpbitSignalFeed {
     setTimeout(() => {
       if (!this.running) return;
       const ws = new WebSocket(config.upbitWsUrl);
+      ws.binaryType = "arraybuffer";
       this.socket = ws;
       ws.onopen = () => {
         this.reconnectMs = 500;
@@ -315,8 +316,10 @@ export class ExternalSignals {
 
   snapshot(coinbaseMid: number): CrossMarketSnapshot {
     const now = Date.now();
-    const fresh = <T extends VenueSignal>(value: T | null): T | null =>
-      value?.ageMs !== null && value.ageMs! <= config.signalMaxAgeMs ? value : null;
+    const fresh = <T extends VenueSignal>(value: T | null): T | null => {
+      if (!value || value.ageMs === null || value.ageMs > config.signalMaxAgeMs) return null;
+      return value;
+    };
 
     return {
       baseAsset: config.baseAsset,
