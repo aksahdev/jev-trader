@@ -1,6 +1,7 @@
 import { experimental_evaluate } from "ai";
 import { typeSafeAi } from "@ai-sdk/typesafe-ai";
 import { config } from "./config";
+import type { CrossMarketSnapshot } from "./signals";
 
 export type Action = "buy" | "sell" | "hold";
 
@@ -19,6 +20,7 @@ export interface TradeState {
   recentMids: string;
   trades: { count: number; buyBase: number; sellBase: number; cvdBase: number; vwap: number | null; lastPrice: number | null; lastSide: "buy" | "sell" | null };
   recentTrades: string[];
+  crossMarket: CrossMarketSnapshot;
   allowed: { buy: boolean; sell: boolean };
 }
 
@@ -41,15 +43,15 @@ const QUESTIONS = {
   direction: {
     type: "choice",
     instructions: {
-      question: "At the configured horizon, which action has the best expected outcome for a passive maker quote: buy, sell, or hold?",
+      question: "At the configured horizon, which action has the best expected outcome for a passive maker quote on Coinbase: buy, sell, or hold?",
       goal: "Trade the configured Coinbase spot product using a post-only style paper quote near the touch. Prefer hold when the expected short-horizon move is too small or uncertain to justify adverse-selection and fee risk.",
       timing: "A decision is made every `decisionIntervalMs`; the forecast horizon is `horizonMs`.",
-      inputs: "Use recent taker flow, order-book imbalance and depth, spread, short-horizon returns, recent mids, and whether each side is allowed by the position cap. Treat conflicting or weak evidence as a reason to hold.",
+      inputs: "Use Coinbase taker flow, order-book imbalance/depth, spread, short-horizon returns and recent mids. Also use `crossMarket`: Binance is a global USDT signal venue; Upbit is the Korean KRW market normalized by KRW-USDT. Positive `deltaVsCoinbaseBps` means that venue is priced above Coinbase. Compare 1s/5s/30s returns and 5s aggressive flow across venues to detect lead/lag rather than assuming any venue always leads. Upbit `premiumVsCoinbaseBps` is a regime signal and can persist, so do not blindly mean-revert it. Ignore a venue when its snapshot is null. Treat conflicting or weak evidence as a reason to hold.",
     },
     criteria: {
       buy: "Rest a passive bid: upward short-horizon edge is strongest and large enough to justify the quote risk.",
       sell: "Rest a passive ask: downward short-horizon edge is strongest and large enough to justify the quote risk.",
-      hold: "Do not quote this interval because evidence is weak, conflicting, or expected edge is not sufficient.",
+      hold: "Do not quote this interval because evidence is weak, conflicting, stale, or expected edge is not sufficient.",
     },
   },
 } as const;
@@ -86,7 +88,23 @@ export class MockModel implements Model {
     const t0 = performance.now();
     const flowDen = state.trades.buyBase + state.trades.sellBase;
     const flow = flowDen ? state.trades.cvdBase / flowDen : 0;
-    const signal = state.returnsBps.last5 / 5 + state.bookImbalance * 1.5 + flow * 2 + this.noise(state.tick);
+
+    let external = 0;
+    const b = state.crossMarket.binance;
+    if (b) {
+      const bFlowDen = b.buyBase5s + b.sellBase5s;
+      const bFlow = bFlowDen ? b.cvdBase5s / bFlowDen : 0;
+      external += (b.return1sBps ?? 0) / 6 + (b.deltaVsCoinbaseBps ?? 0) / 10 + bFlow;
+    }
+    const u = state.crossMarket.upbit;
+    if (u) {
+      const uFlowDen = u.buyBase5s + u.sellBase5s;
+      const uFlow = uFlowDen ? u.cvdBase5s / uFlowDen : 0;
+      external += (u.return1sBps ?? 0) / 8 + (u.deltaVsCoinbaseBps ?? 0) / 15 + uFlow * 0.5;
+    }
+    external = Math.max(-3, Math.min(3, external));
+
+    const signal = state.returnsBps.last5 / 5 + state.bookImbalance * 1.5 + flow * 2 + external + this.noise(state.tick);
     const directionalBuy = 1 / (1 + Math.exp(-signal));
     const hold = Math.min(0.45, 0.45 * Math.exp(-Math.abs(signal)));
     const probabilities = {
