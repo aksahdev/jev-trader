@@ -1,10 +1,12 @@
 const env = (key: string, fallback?: string) => process.env[key] ?? fallback;
 const bool = (key: string, fallback = true) => env(key, String(fallback)) !== "false";
-const productId = env("PRODUCT_ID", "BTC-USDC")!;
-const baseAsset = env("BASE_ASSET", productId.split("-")[0]!)!;
+const requestedProductId = env("PRODUCT_ID", "BTC-USD")!;
+const productId = env("COINBASE_PRODUCT_ID", requestedProductId.replace(/-USDC$/i, "-USD"))!;
+const baseAsset = env("BASE_ASSET", requestedProductId.split("-")[0]!)!;
 
 export const config = {
   venue: "coinbase" as const,
+  requestedProductId,
   productId,
   baseAsset,
   wsUrl: env("COINBASE_WS_URL", "wss://advanced-trade-ws.coinbase.com")!,
