@@ -36,7 +36,7 @@ trader = new CoinbaseTrader(
     const binance = event.signals.binance?.deltaVsCoinbaseBps;
     const korea = event.signals.upbit?.premiumVsCoinbaseBps;
     const cross = ` · bn ${binance == null ? "n/a" : binance.toFixed(1) + "bp"} · kr ${korea == null ? "n/a" : korea.toFixed(1) + "bp"}`;
-    console.log(`#${event.tick} ${event.market} ${event.mid.toFixed(8)} ${probs}${quote} pnl $${event.totals.pnlUsd}${cross}${timing ? ` · loop ${timing.loopMs}ms` : ""}`);
+    console.log(`#${event.tick} ${event.market} ${event.mid.toFixed(8)} ${probs}${quote} gross ${event.totals.grossPnlUsd} fees ${event.totals.feesUsd} net ${event.totals.pnlUsd}${cross}${timing ? ` · loop ${timing.loopMs}ms` : ""}`);
     if (q) server.broadcastQuote(event.tick, q);
   },
   (tick, fill) => {
