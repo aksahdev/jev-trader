@@ -33,6 +33,7 @@ export interface Totals {
   jevUsd: number;
   feesUsd: number;
   realizedUsd: number;
+  grossPnlUsd: number;
   pnlUsd: number;
   pnlPct: number;
 }
@@ -274,7 +275,8 @@ export class CoinbaseTrader {
     timing?: Timing,
   ) {
     const unrealized = this.unrealizedUsd(book.mid);
-    this.totals.grossPnlUsd = this.totals.realizedUsd + unrealized;\n    this.totals.pnlUsd = this.totals.grossPnlUsd - this.totals.feesUsd;
+    this.totals.grossPnlUsd = this.totals.realizedUsd + unrealized;
+    this.totals.pnlUsd = this.totals.grossPnlUsd - this.totals.feesUsd;
     this.totals.pnlPct = this.totals.pnlUsd / config.bankrollUsd * 100;
     const event: TraderEvent = {
       tick,
@@ -306,6 +308,7 @@ export class CoinbaseTrader {
         jevUsd: round(this.totals.jevUsd, 6),
         feesUsd: round(this.totals.feesUsd, 6),
         realizedUsd: round(this.totals.realizedUsd, 6),
+        grossPnlUsd: round(this.totals.grossPnlUsd, 6),
         pnlUsd: round(this.totals.pnlUsd, 6),
         pnlPct: round(this.totals.pnlPct, 4),
       },
