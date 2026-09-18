@@ -44,6 +44,7 @@ interface RestingOrder {
   size: number;
   remaining: number;
   placedTick: number;
+  queueAhead: number;
 }
 
 export interface Timing { readMs: number; loopMs: number }
@@ -125,7 +126,7 @@ export class CoinbaseTrader {
           decision.action = side;
           const price = quotePrice(side, book);
           const orderId = this.nextOrderId++;
-          this.resting = { id: orderId, side, price, size: config.tradeSizeBase, remaining: config.tradeSizeBase, placedTick: tick };
+          this.resting = {\n            id: orderId,\n            side,\n            price,\n            size: config.tradeSizeBase,\n            remaining: config.tradeSizeBase,\n            placedTick: tick,\n            queueAhead: queueAheadAtPrice(side, price, book) * config.paperQueueFraction,\n          };
           quote = { side, price, size: config.tradeSizeBase, txHash: null, cancel: [], status: "sim", orderId, capped };
           this.totals.quotes++;
         } else {
@@ -147,9 +148,34 @@ export class CoinbaseTrader {
     const fills: Fill[] = [];
     for (const trade of trades) {
       if (order.remaining <= 1e-12) break;
+
+      // Coinbase documents public market-trade `side` as the MAKER side.
+      // A resting buy can only be filled by a trade whose maker side is buy, and vice versa.
+      if (trade.side !== order.side) continue;
+
       const crossed = order.side === "buy" ? trade.price <= order.price : trade.price >= order.price;
       if (!crossed) continue;
-      const size = Math.min(order.remaining, trade.size);
+
+      let executable = trade.size;
+
+      // If the print is exactly at our resting price, displayed size that was already there
+      // has priority over our newly-posted simulated order. Consume that queue first.
+      if (Math.abs(trade.price - order.price) <= config.priceIncrement / 2 && order.queueAhead > 0) {
+        const aheadConsumed = Math.min(order.queueAhead, executable);
+        order.queueAhead -= aheadConsumed;
+        executable -= aheadConsumed;
+      }
+
+      // If price printed strictly through our limit, our price level must have traded through.
+      // In that case the remaining order is eligible to fill even if the current print is small.
+      if (order.side === "buy" ? trade.price < order.price : trade.price > order.price) {
+        executable = Math.max(executable, order.remaining);
+        order.queueAhead = 0;
+      }
+
+      const size = Math.min(order.remaining, executable);
+      if (size <= 1e-12) continue;
+
       const feeUsd = size * order.price * config.paperMakerFeeBps / 10_000;
       const fill: Fill = { side: order.side, size, price: order.price, txHash: null, orderId: order.id, simulated: true, feeUsd };
       order.remaining -= size;
@@ -295,6 +321,12 @@ function quotePrice(side: Side, book: Book) {
     price = candidate > book.bid ? candidate : book.ask;
   }
   return Math.round(price / tick) * tick;
+}
+
+function queueAheadAtPrice(side: Side, price: number, book: Book) {
+  const levels = side === "buy" ? book.levels.bids : book.levels.asks;
+  const level = levels.find(([p]) => Math.abs(p - price) <= config.priceIncrement / 2);
+  return level?.[1] ?? 0;
 }
 
 function priceDecimals() {
